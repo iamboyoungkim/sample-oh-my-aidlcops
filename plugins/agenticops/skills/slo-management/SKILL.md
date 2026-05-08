@@ -457,6 +457,7 @@ def generate_slo_report(service: str, period: str = "weekly") -> str:
 
 - `.omao/plans/slo/definitions/${service}.yaml` — SLO 정의
 - `.omao/plans/slo/reports/${service}-${period}-${date}.md` — SLO 리포트
+- `.omao/plans/slo/overrides/${service}.yaml` — Error Budget freeze override 사유 기록
 - `.omao/state/slo/${service}/current.json` — 현재 SLI/Error Budget 상태
 - `.omao/state/slo/${service}/deploy-gate.json` — 배포 게이트 판정 결과
 - `.omao/state/slo/${service}/history.jsonl` — SLI 이력 (번다운 차트용)

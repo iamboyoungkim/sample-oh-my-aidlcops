@@ -193,10 +193,13 @@ Operations phase가 활성화되면 다음 상태 파일을 사용한다. 모든
 | `.omao/state/slo/` | 서비스별 현재 SLI/Error Budget 상태 |
 | `.omao/plans/observability/baselines/` | 메트릭별 베이스라인 정의 |
 | `.omao/plans/observability/dependency-map.yaml` | 서비스 의존성 맵 |
+| `.omao/plans/observability/rca-patterns.yaml` | RCA 반복 패턴 학습 결과 (RCA 완료 후 갱신) |
 | `.omao/plans/slo/definitions/` | SLO 정의 파일 |
 | `.omao/plans/slo/reports/` | SLO 리포트 |
+| `.omao/plans/slo/overrides/` | Error Budget freeze override 사유 |
 | `.omao/plans/scaling/` | 스케일링 대상, 예측, 스케줄 |
 | `.omao/plans/runbooks/` | Remediation runbook 정의 |
+| `.omao/plans/runbooks/effectiveness.yaml` | Runbook별 성공률 통계 |
 
 ## Blocking Findings
 
