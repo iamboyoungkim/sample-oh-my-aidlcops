@@ -20,14 +20,14 @@ from pathlib import Path
 REQUIRED_SECTIONS = [
     "When to Use",
     "Prerequisites",
-    "상태 관리",
-    "기존 스킬 연동",
     "참고 자료",
 ]
 
 OPTIONAL_SECTIONS = [
     "Example Inputs/Outputs",
     "실행 흐름",
+    "상태 관리",
+    "기존 스킬 연동",
 ]
 
 

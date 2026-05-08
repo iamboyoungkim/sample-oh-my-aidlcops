@@ -69,6 +69,8 @@ slos:
       metric: "agenticops_eval_faithfulness"
       source: prometheus
       query: 'agenticops_eval_faithfulness{service="rag-qa-agent"}'
+      query_good: 'count_over_time((agenticops_eval_faithfulness{service="rag-qa-agent"} >= 0.85)[7d:1h])'
+      query_total: 'count_over_time(agenticops_eval_faithfulness{service="rag-qa-agent"}[7d:1h])'
     target: 0.85           # 85% 이상
     window: 7d             # 품질 SLO는 7일 윈도우
 
@@ -85,29 +87,30 @@ slos:
     window: 7d
 
 error_budget_policy:
+  # 경계 규칙: min은 inclusive(이상), max는 exclusive(미만). 최상위 밴드만 max=100 inclusive.
   - remaining_pct_min: 50
-    remaining_pct_max: 100
+    remaining_pct_max: 100  # inclusive (최상위)
     mode: normal
     deploy_allowed: true
     deploy_frequency: "unlimited"
     description: "정상 운영. 배포 제한 없음."
     
   - remaining_pct_min: 25
-    remaining_pct_max: 50
+    remaining_pct_max: 50   # exclusive (50% 미만)
     mode: slow-down
     deploy_allowed: true
     deploy_frequency: "max 1/day"
     description: "주의 구간. 하루 1회 배포로 제한."
     
   - remaining_pct_min: 10
-    remaining_pct_max: 25
+    remaining_pct_max: 25   # exclusive (25% 미만)
     mode: caution
     deploy_allowed: true
     deploy_frequency: "max 1/week"
     description: "경고 구간. 주 1회 배포로 제한. 안정성 우선."
     
   - remaining_pct_min: 0
-    remaining_pct_max: 10
+    remaining_pct_max: 10   # exclusive (10% 미만)
     mode: freeze
     deploy_allowed: false
     exception: "security-patch-only"
@@ -170,7 +173,8 @@ def calculate_error_budget(slo_config: dict,
     
     # Burn rate: 현재 소진 속도 / 지속 가능 소진 속도
     # 지속 가능 = allowed_bad / window_days (하루 평균 허용량)
-    elapsed_days = min(window_days, (datetime.utcnow() - datetime.utcnow().replace(day=1)).days or 1)
+    # 롤링 윈도우이므로 경과 일수 = window_days (전체 윈도우 기간에 걸쳐 관측)
+    elapsed_days = window_days
     sustainable_daily_burn = allowed_bad / window_days
     actual_daily_burn = bad_events / elapsed_days if elapsed_days > 0 else 0
     burn_rate = actual_daily_burn / sustainable_daily_burn if sustainable_daily_burn > 0 else 0
@@ -265,10 +269,16 @@ def evaluate_budget_policy(service: str, budgets: list[ErrorBudget],
     min_budget = min(budgets, key=lambda b: b.remaining_pct)
     remaining = min_budget.remaining_pct
     
-    # 정책 매칭
+    # 정책 매칭 (min inclusive, max exclusive; 최상위 밴드만 max inclusive)
     active_policy = None
     for policy in sorted(policy_config, key=lambda p: p["remaining_pct_min"]):
-        if policy["remaining_pct_min"] <= remaining <= policy["remaining_pct_max"]:
+        pmin = policy["remaining_pct_min"]
+        pmax = policy["remaining_pct_max"]
+        if pmax == 100:
+            in_band = pmin <= remaining <= pmax
+        else:
+            in_band = pmin <= remaining < pmax
+        if in_band:
             active_policy = policy
             break
     

@@ -52,13 +52,13 @@ targets:
         namespace: "AWS/Bedrock"
         metric_name: "InvocationLatency"
         dimensions:
-          ModelId: "anthropic.claude-sonnet-4-6-20250514-v1:0"
+          ModelId: "anthropic.claude-sonnet-4-6-v1:0"
         display_name: "Bedrock Invocation Latency"
         baseline_window_days: 7
         sensitivity: 3.0
 
       - source: prometheus
-        query: 'agent_token_usage_total{service="rag-qa-agent"}'
+        query: 'rate(agent_token_usage_total{service="rag-qa-agent"}[5m])'
         display_name: "Token Usage"
         baseline_window_days: 7
         sensitivity: 2.5  # 비용 관련은 더 민감하게
@@ -159,22 +159,25 @@ def compute_baseline(metric_data: list[float], timestamps: list[str],
 
 ```python
 def seasonal_adjust(value: float, timestamp: str, 
-                    seasonal_profile: dict) -> tuple[float, float]:
+                    seasonal_profile: dict, global_mean: float) -> tuple[float, float]:
     """계절성 프로파일 기반 보정.
     
+    편차 기반 보정: value - seasonal_mean + global_mean
+    (비율 기반 value/factor는 저트래픽 시간대에서 false critical을 유발하므로 사용 금지)
+    
     Returns:
-        (adjusted_value, seasonal_factor)
+        (adjusted_value, seasonal_mean)
     """
     dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     key = f"{dt.weekday()}_{dt.hour}"
-    factor = seasonal_profile.get(key)
+    seasonal_mean = seasonal_profile.get(key)
     
-    if factor is None or factor == 0:
-        return value, 1.0
+    if seasonal_mean is None:
+        return value, global_mean
     
-    # 계절성 보정: 현재 값을 해당 시간대 평균 대비 비율로 변환
-    adjusted = value / factor if factor != 0 else value
-    return adjusted, factor
+    # 편차 기반 보정: 현재 값에서 시간대 평균을 빼고 전역 평균을 더함
+    adjusted = value - seasonal_mean + global_mean
+    return adjusted, seasonal_mean
 
 
 def is_in_exclusion_window(timestamp: str, exclusions: list[dict]) -> bool:
@@ -330,7 +333,7 @@ mcp__prometheus__query_range \
 mcp__cloudwatch__get_metric_data \
   --metric-name "InvocationLatency" \
   --namespace "AWS/Bedrock" \
-  --dimensions '[{"Name":"ModelId","Value":"anthropic.claude-sonnet-4-6-20250514-v1:0"}]' \
+  --dimensions '[{"Name":"ModelId","Value":"anthropic.claude-sonnet-4-6-v1:0"}]' \
   --period 60 \
   --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

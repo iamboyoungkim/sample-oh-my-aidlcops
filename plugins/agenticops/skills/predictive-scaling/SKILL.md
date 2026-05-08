@@ -25,7 +25,7 @@ allowed-tools: "Read,Grep,Bash,mcp__cloudwatch,mcp__prometheus,mcp__eks"
 
 - **awslabs.cloudwatch-mcp-server==0.0.25** — 과거 메트릭 조회.
 - **awslabs.prometheus-mcp-server==0.2.15** — 시계열 데이터.
-- **awslabs.eks-mcp-server==0.1.28** — HPA/Deployment 현재 설정 조회 및 업데이트 (`@latest` 금지, PyPI 버전 pin 필수).
+- **awslabs.eks-mcp-server==0.1.28** — HPA/Deployment 현재 설정 조회 전용 (`@latest` 금지, PyPI 버전 pin 필수). 승인된 스케일링 스케줄 적용(CronHPA 업데이트)은 EKS MCP가 아닌 `kubectl` Bash 명령으로 실행하며, EKS MCP는 read-only 기본값을 유지합니다.
 - 과거 트래픽 데이터: 최소 14일, 권장 30일 이상.
 - 스케일링 정의: `.omao/plans/scaling/targets/${service}.yaml`.
 - `cost-governance` 예산 파일 접근 — 비용 상한 내 스케일링 보장.
@@ -107,7 +107,7 @@ class ForecastResult:
 def seasonal_forecast(historical_data: list[float], 
                       timestamps: list[str],
                       forecast_hours: int = 24,
-                      confidence: float = 0.95) -> ForecastResult:
+                      confidence: float = 0.95) -> list[dict]:
     """계절성 분해 기반 수요 예측.
     
     방법:
@@ -162,9 +162,8 @@ def seasonal_forecast(historical_data: list[float],
         residuals.append(data[i] - expected)
     residual_std = np.std(residuals)
     
-    # z-score for confidence interval
-    from scipy.stats import norm
-    z = norm.ppf((1 + confidence) / 2) if confidence < 1 else 1.96
+    # z-score for 95% confidence interval (hardcoded to avoid scipy dependency)
+    z = 1.96
     
     # 5. 예측 생성
     now = datetime.utcnow()
@@ -174,12 +173,12 @@ def seasonal_forecast(historical_data: list[float],
         hour_of_day = future_time.hour
         day_of_week = future_time.weekday()
         
-        # 예측 = 트렌드 + 시간대 패턴 × 요일 보정
-        predicted = (trend_last + trend_slope * h) * daily_factors[day_of_week]
-        # 시간대 패턴 적용
+        # 예측 = 시간대 패턴 × 요일 보정 + 트렌드
         if overall_avg > 0:
             predicted = hourly_pattern[hour_of_day] * daily_factors[day_of_week]
             predicted += trend_slope * h  # 트렌드 보정
+        else:
+            predicted = trend_last + trend_slope * h
         
         upper = predicted + z * residual_std
         lower = max(0, predicted - z * residual_std)
@@ -218,8 +217,8 @@ def apply_event_adjustments(predictions: list[dict],
             cron_min, cron_hour = int(parts[0]), int(parts[1])
             cron_dow = parts[4]
             
-            # 요일 매칭
-            dow_match = (cron_dow == "*" or int(cron_dow) == ts.weekday())
+            # 요일 매칭 (cron: 0=Sun..6=Sat → Python isoweekday: 1=Mon..7=Sun)
+            dow_match = (cron_dow == "*" or int(cron_dow) == ts.isoweekday() % 7)
             # 시간 매칭 (duration 고려)
             hour_match = (cron_hour <= ts.hour < cron_hour + event["duration_hours"])
             

@@ -23,7 +23,7 @@ allowed-tools: "Read,Grep,Bash,mcp__cloudwatch,mcp__prometheus,mcp__eks"
 ## Prerequisites
 
 - **Runbook 저장소**: `.omao/plans/runbooks/` 에 패턴별 `${pattern-name}.yaml` 형식.
-- **awslabs.eks-mcp-server==0.1.28** — Pod restart, scale-out 등 K8s 조작 (`@latest` 금지, PyPI 버전 pin 필수).
+- **awslabs.eks-mcp-server==0.1.28** — EKS 클러스터 상태 조회 전용 (`@latest` 금지, PyPI 버전 pin 필수). Write 작업(Pod 삭제, eviction, scale 변경)은 EKS MCP가 아닌 `kubectl` Bash 명령으로 실행하며, EKS MCP는 read-only 기본값을 유지합니다.
 - **awslabs.cloudwatch-mcp-server==0.0.25** — 복구 전/후 메트릭 비교.
 - **awslabs.prometheus-mcp-server==0.2.15** — 복구 검증 메트릭 조회.
 - `incident-response` 상태 파일 접근 (`.omao/state/incident/`).
@@ -120,7 +120,7 @@ description: "Node memory pressure 자동 대응"
 version: "1.0.0"
 match_conditions:
   - symptom: "MemoryPressure"
-  - k8s_event: "NodeHasMemoryPressure"
+  - k8s_event: "EvictionThresholdMet"
   - metric: "node_memory_MemAvailable_bytes"
     condition: "< 10%"
 severity_scope: [SEV2, SEV3]
@@ -433,7 +433,11 @@ def execute_step(step: dict, incident: dict) -> str:
     params = step.get("params", {})
     timeout = step.get("timeout_sec", 60)
     
-    if action == "kubectl_logs":
+    if action == "kubectl_get_revision":
+        # kubectl rollout history deployment/...
+        return f"Current revision identified for {params.get('resource', 'deployment')}"
+    
+    elif action == "kubectl_logs":
         # mcp__eks__get_pod_logs(...)
         return f"Collected {params.get('tail_lines', 100)} lines of logs"
     
