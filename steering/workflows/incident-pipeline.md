@@ -26,6 +26,57 @@ SEV2/3 복구는 `automated-remediation`의 preflight 검증을 통과한 경우
 
 ---
 
+## Required Context
+
+파이프라인을 실행하기 전에 다음 정보가 확보되어야 합니다.
+
+```
+[ ] 1. 모니터링 대상 정의 — .omao/plans/observability/monitoring-targets.yaml
+[ ] 2. 베이스라인 데이터 — 최소 7일 이상 메트릭 축적 (.omao/plans/observability/baselines/)
+[ ] 3. 서비스 의존성 맵 — .omao/plans/observability/dependency-map.yaml
+[ ] 4. Runbook 저장소 — .omao/plans/runbooks/ 에 1개 이상의 runbook 정의
+[ ] 5. Golden dataset — .omao/plans/eval/golden/${target}.jsonl (최소 100 sample)
+[ ] 6. MCP 서버 접근 — cloudwatch, prometheus MCP 정상 응답
+[ ] 7. On-call 라우팅 — PagerDuty/Opsgenie 통합 설정 (SEV1 page용)
+[ ] 8. 대상 서비스 배포 상태 — autopilot-deploy 상태 파일 존재
+```
+
+---
+
+## Pre-flight Checks
+
+모든 점검을 통과해야 파이프라인이 실행됩니다.
+
+| # | Check | 조건 | Fail 시 조치 |
+|---|-------|------|-------------|
+| 1 | CloudWatch MCP 접근 | `mcp__cloudwatch` 응답 200 | MCP 서버 재시작 유도 |
+| 2 | Prometheus MCP 접근 | `mcp__prometheus` 응답 200 | 연결 설정 확인 |
+| 3 | 베이스라인 존재 | `.omao/plans/observability/baselines/` 에 1개 이상 파일 | anomaly-detection 단독 실행으로 베이스라인 생성 |
+| 4 | Runbook 존재 | `.omao/plans/runbooks/*.yaml` 1개 이상 | runbook 미존재 시 remediate step은 skip |
+| 5 | 활성 SEV1 없음 | `.omao/state/incident/sev1-*` 미해결 건 없음 | 기존 SEV1 해소 후 재실행 |
+| 6 | Deploy freeze 아님 | `.omao/state/autopilot-deploy/freeze.json` 없음 | freeze 해제 후 재실행 |
+| 7 | Golden dataset 존재 | verify step용 최소 100 sample | dataset 없으면 verify step skip |
+| 8 | 이전 파이프라인 중복 | 동일 인시던트에 대한 진행 중 파이프라인 없음 | 기존 파이프라인 완료 대기 |
+
+### Pre-flight Report
+
+```
++-------------------------------+--------+---------------------+
+| Check                         | Status | Details             |
++-------------------------------+--------+---------------------+
+| 1. CloudWatch MCP reachable   |  P/F   |                     |
+| 2. Prometheus MCP reachable   |  P/F   |                     |
+| 3. Baselines exist            |  P/F   |                     |
+| 4. Runbooks available         |  P/F   |                     |
+| 5. No active SEV1             |  P/F   |                     |
+| 6. No deploy freeze           |  P/F   |                     |
+| 7. Golden dataset ready       |  P/F   |                     |
+| 8. No duplicate pipeline      |  P/F   |                     |
++-------------------------------+--------+---------------------+
+```
+
+---
+
 ## DAG Structure
 
 ```mermaid
@@ -78,6 +129,19 @@ flowchart LR
 
 **on_failure: fail (default)** — severity 분류 실패 시 파이프라인을 중단합니다. 분류 없이 진행하면 SEV1 인시던트에 자동 복구가 실행될 위험이 있습니다.
 
+### 🛑 CHECKPOINT — Triage Complete (SEV1 Gate)
+
+SEV1로 분류된 경우 여기서 파이프라인의 자동 진행을 멈춥니다.
+
+- **SEV1**: on-call page 후 사람 개입 대기. 에이전트는 diagnose까지만 보조하고 remediate/verify는 사람이 수행.
+- **SEV2/3**: 자동 진행 가능. 아래 조건 확인 후 proceed.
+- **SEV4**: 리포트만 생성하고 주간 리뷰 큐에 적재. 파이프라인 종료.
+
+Before proceeding (SEV2/3 only):
+- [ ] severity가 SEV2 또는 SEV3으로 확정됐는가
+- [ ] 가설이 최소 1개 이상 생성됐는가
+- [ ] deploy freeze가 적용됐는가 (SEV2의 경우)
+
 ---
 
 ### Step 3: diagnose (root-cause-analysis)
@@ -119,6 +183,13 @@ flowchart LR
 - max_retries 초과 시 자동 에스컬레이션
 - 동시 영향 Pod/서비스 수 상한 (기본 3)
 - Human override (`/stop-remediation`) 즉시 중단
+
+### 🛑 CHECKPOINT — Remediation Complete
+
+Before proceeding to verify:
+- [ ] remediation이 성공적으로 완료됐는가 (또는 rollback 후 안정됐는가)
+- [ ] post-snapshot 메트릭이 pre-snapshot 대비 개선됐는가
+- [ ] 에스컬레이션 없이 정상 종료됐는가
 
 ---
 
@@ -199,7 +270,43 @@ oma run-workflow agenticops incident-pipeline
 
 ---
 
+## Validation Report
+
+파이프라인 완료 후 전체 결과를 아래 형식으로 요약합니다.
+
+```
++-------------------------------+--------+---------------------+
+| Validation                    | Status | Details             |
++-------------------------------+--------+---------------------+
+| Anomaly detected              |  P/F   | metric/severity     |
+| Incident classified           |  P/F   | SEV level           |
+| Root cause identified         |  P/F   | confidence score    |
+| Remediation executed          |  P/F   | runbook name        |
+| Recovery verified             |  P/F   | gate decision       |
+| No SEV1 auto-remediation      |  P/F   | safety check        |
+| Post-metrics within baseline  |  P/F   | metric comparisons  |
++-------------------------------+--------+---------------------+
+| OVERALL                       |  P/F   | Resolved / Escalated|
++-------------------------------+--------+---------------------+
+```
+
+---
+
 ## 참고 자료
+
+### 공식 문서
+
+- [Amazon CloudWatch Anomaly Detection](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Anomaly_Detection.html) — AWS 네이티브 이상 탐지
+- [Prometheus AlertManager](https://prometheus.io/docs/alerting/latest/alertmanager/) — 알람 라우팅
+- [Kubernetes Events API](https://kubernetes.io/docs/reference/kubernetes-api/cluster-resources/event-v1/) — 클러스터 이벤트
+- [AWS CloudTrail](https://docs.aws.amazon.com/cloudtrail/latest/userguide/) — 변경 이력 추적
+- [Ragas Documentation](https://docs.ragas.io/) — RAG 평가 메트릭
+
+### 기술 블로그
+
+- [Google SRE — Managing Incidents](https://sre.google/sre-book/managing-incidents/) — Incident command 원칙
+- [Google SRE — Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/) — 체계적 진단 방법론
+- [Netflix — RAD Outlier Detection](https://netflixtechblog.com/rad-outlier-detection-on-big-data-d6b0ff32fb44) — 대규모 시계열 이상 탐지
 
 ### 관련 스킬 (내부)
 
